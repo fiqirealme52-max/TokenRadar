@@ -81,6 +81,14 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); box-shadow: ins
 .badge.watch { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
 .badge.early { background: var(--chip); color: var(--muted); border: 1px solid var(--line); }
 .badge.live { background: #e6f4ec; color: var(--good); border: 1px solid var(--good); }
+.badge.farm { background: #e6f4ec; color: var(--good); border: 1px solid var(--good); }
+.badge.thin { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+.badge.skip { background: #fbe9e7; color: var(--bad); border: 1px solid var(--bad); }
+.farm-cell { display: grid; gap: 2px; justify-items: start; }
+.farm-cell .num { font-size: 12px; color: var(--muted); }
+.kpi { grid-template-columns: repeat(3, 1fr); margin-top: var(--s3); }
+.chart { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); margin-top: var(--s3); }
+.chart svg { display: block; }
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
