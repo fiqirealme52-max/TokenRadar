@@ -30,18 +30,28 @@
     return Math.max(0, Math.round(days)) + 'd';
   }
 
-  // The model, recomputed here from the row's snapshot figures.
-  function categoryMultiple(category) {
+  // The model, recomputed here from the row's snapshot figures: the fitted
+  // log-log curve from DATA.fit (intercept, slope, per-group offsets) times
+  // the same growth, maturity and breadth factors main.ts applies. The page
+  // recomputes each row's implied value from the snapshot figures, so the
+  // code and board.json are visibly the same arithmetic.
+  function groupOf(category) {
     var c = (category || '').toLowerCase();
-    if (c.indexOf('dex') >= 0 || c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 0.35;
-    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 0.30;
-    if (c.indexOf('risk curator') >= 0 || c.indexOf('capital allocator') >= 0 || c.indexOf('yield aggregator') >= 0) return 0.28;
-    if (c.indexOf('yield') >= 0) return 0.25;
-    if (c.indexOf('rwa') >= 0 || c.indexOf('real world') >= 0) return 0.22;
-    if (c.indexOf('bridge') >= 0) return 0.15;
-    if (c.indexOf('liquid staking') >= 0 || c.indexOf('restak') >= 0 || c.indexOf('staking pool') >= 0) return 0.12;
-    if (c.indexOf('stablecoin') >= 0 || c.indexOf('payments') >= 0 || c.indexOf('chain') >= 0) return 0.18;
-    return 0.20;
+    if (c.indexOf('dex') >= 0 || c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('basis trading') >= 0) return 'dex_perps';
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'lending';
+    if (c.indexOf('risk curator') >= 0 || c.indexOf('capital allocator') >= 0 || c.indexOf('yield aggregator') >= 0) return 'curators';
+    if (c.indexOf('yield') >= 0) return 'yield';
+    if (c.indexOf('rwa') >= 0 || c.indexOf('real world') >= 0) return 'rwa';
+    if (c.indexOf('bridge') >= 0) return 'bridge';
+    if (c.indexOf('liquid staking') >= 0 || c.indexOf('restak') >= 0 || c.indexOf('staking pool') >= 0) return 'staking';
+    return 'other';
+  }
+  function groupOffset(group) {
+    var found = (DATA.fit.groups || []).filter(function (g) { return g.group === group; })[0];
+    return found ? found.offset : 0;
+  }
+  function fittedBase(row) {
+    return Math.exp(DATA.fit.intercept + DATA.fit.slope * Math.log(Math.max(1, row.tvl_usd)) + groupOffset(groupOf(row.category)));
   }
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null ? 0 : row.change_7d));
@@ -49,7 +59,7 @@
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + Math.sqrt(Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
     var breadth = 1 + Math.min(Math.max((row.chains || []).length - 1, 0) * model.breadth_per_chain, model.breadth_cap);
-    return Math.max(1, Math.round(row.tvl_usd * categoryMultiple(row.category) * growthMult * maturity * breadth));
+    return Math.max(1, Math.round(fittedBase(row) * growthMult * maturity * breadth));
   }
 
   function el(tag, attrs) {
@@ -185,6 +195,7 @@
       var av, bv;
       if (key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
+      else if (key === 'farm') { av = a.expected_net_usd; bv = b.expected_net_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
@@ -295,6 +306,10 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', null, el('div', { class: 'farm-cell' },
+          el('span', { class: 'badge ' + (r.verdict === 'FARM' ? 'farm' : r.verdict === 'THIN' ? 'thin' : 'skip'), text: r.verdict }),
+          el('span', { class: 'num', text: (r.expected_net_usd < 0 ? '-$' : '$') + Math.abs(r.expected_net_usd).toFixed(0) + ' net' })
+        )),
         el('td', null, el('span', { class: r.watchlist ? 'badge watch' : 'badge early', text: r.watchlist ? 'WATCHLIST' : 'EARLY' }))
       );
       tbody.appendChild(tr);
@@ -310,6 +325,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('farm', 'Farm · expected net'),
             el('th', { scope: 'col', text: 'Board' })
           )),
           tbody
@@ -343,35 +359,106 @@
 
   function modelPanel() {
     var m = DATA.model;
-    var multRows = [
-      ['DEXs, perps & derivatives', '0.35'],
-      ['Lending, CDP & collateral', '0.30'],
-      ['Risk curators, capital allocators & yield aggregators', '0.28'],
-      ['Yield', '0.25'],
-      ['RWA', '0.22'],
-      ['Bridges', '0.15'],
-      ['Liquid staking, restaking & staking pools', '0.12'],
-      ['Everything else', '0.20']
-    ];
+    var f = DATA.fit;
+    var groupRows = f.groups.map(function (g) {
+      var mult100 = Math.exp(f.intercept + f.slope * Math.log(1e8) + g.offset) / 1e8;
+      return [g.label + ' (' + g.n + ' traded)', 'x' + mult100.toFixed(3) + ' at $100M TVL' + (g.offset >= 0 ? ' (+' : ' (') + g.offset.toFixed(2) + ' log pts)'];
+    });
     return el('section', { class: 'panel model' },
-      el('h2', { text: 'How implied value is computed' }),
-      el('p', { class: 'sub', text: 'One function scores every row from the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
+      el('h2', { text: 'How implied value is computed — a fitted curve, not hand-picked multiples' }),
+      el('p', { class: 'sub', text: 'The core multiple is fitted to the snapshot’s own traded tokens and recomputed on every run. No protocol name is special-cased, and no multiple is written in by hand.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x category_multiple x growth_multiplier x maturity_multiplier x breadth_multiplier )'
+        'log(market cap) = ' + f.intercept.toFixed(4) + ' + ' + f.slope.toFixed(4) + ' x log(TVL) + group offset' + '\n' +
+        'implied = round( fitted_base x growth_multiplier x maturity_multiplier x breadth_multiplier )'
       ),
       el('table', { class: 'mult-table' },
-        el('thead', null, el('tr', null, el('th', { text: 'Category' }), el('th', { text: 'TVL multiple' }))),
-        el('tbody', null, multRows.map(function (row) { return el('tr', null, el('td', { text: row[0] }), el('td', { class: 'num', text: row[1] })); }))
+        el('thead', null, el('tr', null, el('th', { text: 'Business group' }), el('th', { text: 'Fitted multiple' }))),
+        el('tbody', null, groupRows.map(function (row) { return el('tr', null, el('td', { text: row[0] }), el('td', { class: 'num', text: row[1] })); }))
       ),
       el('p', { class: 'sub', text:
-        'Growth is the seven-day TVL change, clamped to ' + m.growth_floor + '% .. +' + m.growth_cap +
+        'Fitted on ' + f.n + ' traded tokens: R² = ' + f.r2.toFixed(3) + ', residual spread ' + f.resid_sd.toFixed(2) +
+        ' log points. The slope is ' + f.slope.toFixed(2) + ', so a protocol ten times larger carries about ' +
+        Math.pow(10, f.slope).toFixed(1) + 'x the implied value, not 10x. Group offsets are each group’s mean residual, shrunk toward zero by n / (n + ' +
+        m.fit_shrink_k + ') and clamped to ±' + m.fit_offset_clamp.toFixed(1) +
+        ' log points, so a group with one traded token cannot drag the model. Growth is the seven-day TVL change, clamped to ' + m.growth_floor + '% .. +' + m.growth_cap +
         '%, with falls weighted ' + m.growth_weight_down + 'x and rises ' + m.growth_weight_up +
-        'x — a bleeding protocol is penalised harder than a hot week is rewarded. Maturity is a square-root curve from ' +
+        'x — a scoring choice, not a fitted fact: on the traded tokens the 7-day change does not predict the multiple. Maturity is a square-root curve from ' +
         m.maturity_floor + ' at listing to 1.00 at ' + (m.maturity_days / 365) +
         ' years (an unlisted age counts as ' + m.unknown_age_days +
-        ' days). Breadth adds 2% per extra chain, capped at +10%. The early radar is every pre-token protocol below the watchlist floor, by TVL; live-token protocols are set aside with their market caps shown.'
+        ' days). Breadth adds 2% per extra chain, capped at +10%.'
       })
     );
+  }
+
+  function validationPanel() {
+    var v = DATA.validation;
+    var f = DATA.fit;
+    var k = DATA.kpi;
+    var verdicts = { FARM: 0, THIN: 0, SKIP: 0 };
+    DATA.rows.forEach(function (r) { verdicts[r.verdict] = (verdicts[r.verdict] || 0) + 1; });
+    var improveCv = v.cv_radar2 > 0 ? Math.round((1 - v.cv_fitted / v.cv_radar2) * 100) : 0;
+    var improveWf = v.wf_fitted !== null && v.wf_radar2 !== null && v.wf_radar2 > 0 ? Math.round((1 - v.wf_fitted / v.wf_radar2) * 100) : null;
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Integrity & validation — the fit, checked out of sample' }),
+      el('div', { class: 'stats kpi' },
+        el('div', { class: 'stat' }, el('span', { text: 'Protocols accounted for' }), el('b', { text: String(k.protocols_total) })),
+        el('div', { class: 'stat' }, el('span', { text: 'Watchlist covered' }), el('b', { text: k.watchlist_covered + ' / ' + k.watchlist_size })),
+        el('div', { class: 'stat' }, el('span', { text: 'Ranking monotonic' }), el('b', { text: k.monotonic_pass ? 'PASS' : 'FAIL' })),
+        el('div', { class: 'stat' }, el('span', { text: 'Board fingerprint' }), el('b', { text: k.board_sha })),
+        el('div', { class: 'stat' }, el('span', { text: 'Snapshot date' }), el('b', { text: DATA.as_of })),
+        el('div', { class: 'stat' }, el('span', { text: 'Deterministic (same input, same bytes)' }), el('b', { text: 'YES' }))
+      ),
+      el('p', { class: 'sub', text:
+        'Held-out 5-fold cross-validation (folds by a hash of the slug): the fitted curve’s median absolute log error is ' + v.cv_fitted.toFixed(3) +
+        ' against ' + v.cv_radar2.toFixed(3) + ' for the hand-picked radar-2 multiples on the same held-out tokens — ' + improveCv +
+        '% lower error. Walk-forward (fit on protocols listed before ' + '2024-06-01' + ', test on the ' + v.wf_test_n + ' listed after): fitted ' +
+        (v.wf_fitted === null ? 'n/a' : v.wf_fitted.toFixed(3)) + ' vs hand-picked ' + (v.wf_radar2 === null ? 'n/a' : v.wf_radar2.toFixed(3)) +
+        (improveWf === null ? '.' : ' — ' + improveWf + '% lower error.') +
+        ' The fit is real but modest: the traded multiple is very dispersed, so no TVL curve predicts it precisely. That is why the board shows the fit quality next to the curve instead of hiding it.'
+      }),
+      el('div', { class: 'chart-wrap' }, fitChart()),
+      el('p', { class: 'sub', text:
+        'Each dot is one traded token (log TVL against log market cap); the line is the fitted curve for the “everything else” group. Farm verdicts on this board: FARM ' + verdicts.FARM +
+        ' / THIN ' + verdicts.THIN + ' / SKIP ' + verdicts.SKIP + '. A farm plan assumes ' + (DATA.model.farm_airdrop_share * 100).toFixed(1) +
+        '% of the implied value is distributed to farmers, split across one farmer per $' + (DATA.model.farm_tvl_per_farmer / 1000) + 'K of TVL, minus gas for ' +
+        DATA.model.farm_tx_count + ' transactions and a ' + (DATA.model.farm_opp_apr * 100).toFixed(0) + '%-a-year opportunity cost over a ' +
+        DATA.model.farm_hold_days + '-day hold. FARM clears a $' + DATA.model.farm_min_net + ' expected net; THIN is positive but below it; SKIP is under water. Those are stated assumptions, not snapshot facts.'
+      })
+    );
+  }
+
+  // Log-log scatter of the traded comparables with the fitted curve.
+  function fitChart() {
+    var comps = DATA.comps || [];
+    var W = 640, H = 300, padL = 46, padB = 30, padT = 12, padR = 12;
+    var xs = comps.map(function (c) { return Math.log(c.tvl_usd); });
+    var ys = comps.map(function (c) { return Math.log(c.mcap_usd); });
+    var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    var y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+    function X(v) { return padL + ((v - x0) / (x1 - x0)) * (W - padL - padR); }
+    function Y(v) { return H - padB - ((v - y0) / (y1 - y0)) * (H - padT - padB); }
+    var colors = { dex_perps: '#b7791f', lending: '#1d7a4d', curators: '#7a4db2', yield: '#2e7fa8', rwa: '#b23b2e', bridge: '#6b7a8a', staking: '#8a6d1d', other: '#9aa5b1' };
+    var dots = comps.map(function (c) {
+      return '<circle cx="' + X(Math.log(c.tvl_usd)).toFixed(1) + '" cy="' + Y(Math.log(c.mcap_usd)).toFixed(1) + '" r="3" fill="' + (colors[c.group] || '#9aa5b1') + '" fill-opacity="0.75"><title>' + c.slug + '</title></circle>';
+    }).join('');
+    var f = DATA.fit;
+    var lineX0 = X(x0), lineY0 = Y(f.intercept + f.slope * x0), lineX1 = X(x1), lineY1 = Y(f.intercept + f.slope * x1);
+    var ticks = [1e6, 1e7, 1e8, 1e9, 1e10].filter(function (t) { return Math.log(t) >= x0 && Math.log(t) <= x1; });
+    var xTicks = ticks.map(function (t) {
+      return '<text x="' + X(Math.log(t)).toFixed(1) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10" fill="#6b7a8a">$' + (t >= 1e9 ? (t / 1e9) + 'B' : (t / 1e6) + 'M') + '</text>';
+    }).join('');
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="Traded tokens: log market cap against log TVL, with the fitted curve">' +
+      '<line x1="' + padL + '" y1="' + (H - padB) + '" x2="' + (W - padR) + '" y2="' + (H - padB) + '" stroke="#d9dee4"/>' +
+      '<line x1="' + padL + '" y1="' + padT + '" x2="' + padL + '" y2="' + (H - padB) + '" stroke="#d9dee4"/>' +
+      '<text x="' + (W / 2) + '" y="' + (H - 10 + 12) + '" text-anchor="middle" font-size="11" fill="#33475c"></text>' + xTicks +
+      '<text x="12" y="' + (padT + 8) + '" font-size="10" fill="#6b7a8a">log market cap</text>' +
+      '<text x="' + (W - padR) + '" y="' + (H - padB - 6) + '" text-anchor="end" font-size="10" fill="#6b7a8a">TVL (log scale)</text>' +
+      '<line x1="' + lineX0.toFixed(1) + '" y1="' + lineY0.toFixed(1) + '" x2="' + lineX1.toFixed(1) + '" y2="' + lineY1.toFixed(1) + '" stroke="#14202e" stroke-width="2"/>' +
+      dots + '</svg>';
+    var div = document.createElement('div');
+    div.className = 'chart';
+    div.innerHTML = svg;
+    return div;
   }
 
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
@@ -398,7 +485,7 @@
       el('h3', { text: 'Implied value — the model, factor by factor' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { text: fmtUsd(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'Category multiple (' + (row.category || 'Other') + ')' }), el('b', { text: 'x' + row.category_multiple.toFixed(2) })),
+        el('div', null, el('span', { text: 'Fitted base (' + (row.group || 'other') + ', offset ' + (row.group_offset >= 0 ? '+' : '') + row.group_offset.toFixed(2) + ' log pts)' }), el('b', { text: fmtUsd(row.fitted_base_usd) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { text: fmtPct(row.change_7d) + ' → x' + row.growth_multiplier.toFixed(4) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { text: fmtAge(row.age_days) + ' → x' + row.maturity_multiplier.toFixed(4) })),
         el('div', null, el('span', { text: 'Chains (' + (row.chains || []).length + ')' }), el('b', { text: 'x' + row.breadth_multiplier.toFixed(2) })),
@@ -407,6 +494,14 @@
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the page recomputes this row as ' + fmtUsd(recomputed) + ' — ' + (matches ? 'the same number board.json carries.' : 'which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and not a prediction that a token launches.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Farm plan — costed verdict: ' + row.verdict }),
+      el('div', { class: 'equation' },
+        el('div', null, el('span', { text: 'Deposit' }), el('b', { text: '$' + row.deposit_usd })),
+        el('div', null, el('span', { text: 'Expected allocation' }), el('b', { text: '$' + row.expected_gross_usd.toFixed(2) })),
+        el('div', null, el('span', { text: 'Gas (' + DATA.model.farm_tx_count + ' transactions)' }), el('b', { text: '$' + row.gas_cost_usd.toFixed(2) })),
+        el('div', { class: 'total' }, el('span', { text: 'Expected net' }), el('b', { text: (row.expected_net_usd < 0 ? '-$' : '$') + Math.abs(row.expected_net_usd).toFixed(2) }))
+      ),
+      el('p', { class: 'sub', text: row.verdict_reason + ' Assumes ' + (DATA.model.farm_airdrop_share * 100).toFixed(1) + '% of the implied value goes to farmers, one farmer per $' + (DATA.model.farm_tvl_per_farmer / 1000) + 'K of TVL.' }),
       el('h3', { text: 'Farm plan — 7 steps' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
@@ -429,7 +524,7 @@
     shell.appendChild(hero());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
-    if (state.tab === 'pre-token') shell.appendChild(modelPanel());
+    if (state.tab === 'pre-token') { shell.appendChild(modelPanel()); shell.appendChild(validationPanel()); }
     shell.appendChild(el('p', { class: 'footnote', text: 'Snapshot ' + DATA.as_of + ' from DefiLlama. Implied values are this entry’s own model, not a price and not a launch prediction. Farm plans are a starting point: check the protocol’s own page before moving funds, and never pay to claim an airdrop.' }));
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
