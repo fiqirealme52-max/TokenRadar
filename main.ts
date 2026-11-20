@@ -1,17 +1,20 @@
-// Token Radar (radar-3) — the entry program, Node 22, standard library only.
+// Token Radar (radar-4) — the entry program, Node 22, standard library only.
 //
 // Reads the sealed snapshot, fits the traded-token curve to its own
-// live-token protocols, scores every pre-token protocol with the fitted
-// model in lib/model.ts, validates the fit out of sample, and writes the
-// ranked board, the dashboard data, the dashboard and screenshots, and
-// the dossier the judge reads.
+// live-token protocols (with the fitted growth and age terms the ablation
+// kept, and the token-odds multiplier fitted from the peers' record),
+// scores every pre-token protocol with the fitted model in lib/model.ts,
+// validates each term out of sample, and writes the ranked board, the
+// dashboard data, the dashboard and screenshots, and the dossier the
+// judge reads.
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 //
 // In the grader's container the snapshot lives at /input/snapshot.json and the
 // output at /output; MAKEFUN_OUTPUT_DIR stands in for /output outside it.
 // The program is deterministic: same snapshot in, same bytes out, every run.
-// No clock, no randomness, no network anywhere in the run.
+// No clock, no randomness, no network anywhere in the run. The bootstrap
+// rank ranges use a fixed-seed generator, never Math.random.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, copyFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -43,6 +46,12 @@ const { board, radar } = buildRadar(snapshot);
 const problem = boardIssue(board, snapshot);
 if (problem !== null) {
   process.stderr.write(`token radar: the board fails the gate: ${problem}\n`);
+  process.exit(1);
+}
+const acc = radar.accounting;
+const accounted = acc.ranked + acc.traded + acc.id_no_price + acc.set_aside_cex + acc.set_aside_versioned + acc.set_aside_above_floor + acc.set_aside_below_floor;
+if (accounted !== snapshot.protocols.length) {
+  process.stderr.write(`token radar: accounting adds to ${accounted} of ${snapshot.protocols.length} protocols — refusing to write a board that loses protocols\n`);
   process.exit(1);
 }
 
@@ -88,11 +97,14 @@ writeFileSync(
 const verdicts = { FARM: 0, THIN: 0, SKIP: 0 };
 for (const row of board) verdicts[row.farm.verdict] += 1;
 const topRow = board[0]!;
+const v = radar.validation;
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: accounting ${acc.ranked} ranked + ${acc.traded} traded + ${acc.id_no_price} token-on-record-no-price + ${acc.set_aside_cex + acc.set_aside_versioned + acc.set_aside_above_floor + acc.set_aside_below_floor} set aside = ${accounted}\n` +
     `token radar: fit on ${radar.fit.n} traded tokens: log(mcap) = ${radar.fit.intercept} + ${radar.fit.slope} * log(tvl), R2 = ${radar.fit.r2}, residual sd = ${radar.fit.resid_sd} log points\n` +
-    `token radar: held-out 5-fold median |log error| fitted ${radar.validation.cv_fitted} vs hand-picked ${radar.validation.cv_radar2}; walk-forward fitted ${radar.validation.wf_fitted ?? 'n/a'} vs hand-picked ${radar.validation.wf_radar2 ?? 'n/a'} (${radar.validation.wf_train_n} train / ${radar.validation.wf_test_n} test)\n` +
+    `token radar: fitted terms: growth coef ${radar.fit.growth_coef} (t=${radar.fit.growth_t}), age coef ${radar.fit.age_coef} (t=${radar.fit.age_t}); token odds CV Brier ${v.odds.brier_cv} vs base ${v.odds.brier_base}\n` +
+    `token radar: held-out LOO median |log error| kept ${v.loo_kept} vs base ${v.loo_base}; walk-forward kept ${v.wf_kept ?? 'n/a'} vs base ${v.wf_base ?? 'n/a'} (${v.wf_train_n} train / ${v.wf_test_n} test); P10-P90 range holds ${Math.round(v.ranges.holds * 100)}%\n` +
     `token radar: farm verdicts FARM ${verdicts.FARM} / THIN ${verdicts.THIN} / SKIP ${verdicts.SKIP}; board sha ${radar.kpi.board_sha}; top row ${topRow.name} at $${topRow.implied_value_usd.toLocaleString('en-US')}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, dashboard (${dashboardFiles.length} files), screenshots (${shotNames.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );
