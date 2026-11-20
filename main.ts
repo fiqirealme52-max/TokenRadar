@@ -1,14 +1,17 @@
-// Token Radar (radar-2) — the entry program, Node 22, standard library only.
+// Token Radar (radar-3) — the entry program, Node 22, standard library only.
 //
-// Reads the sealed snapshot, scores every pre-token protocol with the model in
-// lib/model.ts, and writes the ranked board, the dashboard data, the dashboard
-// and screenshots, and the dossier the judge reads.
+// Reads the sealed snapshot, fits the traded-token curve to its own
+// live-token protocols, scores every pre-token protocol with the fitted
+// model in lib/model.ts, validates the fit out of sample, and writes the
+// ranked board, the dashboard data, the dashboard and screenshots, and
+// the dossier the judge reads.
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 //
 // In the grader's container the snapshot lives at /input/snapshot.json and the
 // output at /output; MAKEFUN_OUTPUT_DIR stands in for /output outside it.
 // The program is deterministic: same snapshot in, same bytes out, every run.
+// No clock, no randomness, no network anywhere in the run.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, copyFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -82,7 +85,14 @@ writeFileSync(
   buildDossier(outDir, { text_max_bytes: 65_536, screenshots: { max: 4, max_bytes: 524_288 }, dashboard: { max_files: 400, max_bytes: 4_194_304 } }),
 );
 
+const verdicts = { FARM: 0, THIN: 0, SKIP: 0 };
+for (const row of board) verdicts[row.farm.verdict] += 1;
+const topRow = board[0]!;
+
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: fit on ${radar.fit.n} traded tokens: log(mcap) = ${radar.fit.intercept} + ${radar.fit.slope} * log(tvl), R2 = ${radar.fit.r2}, residual sd = ${radar.fit.resid_sd} log points\n` +
+    `token radar: held-out 5-fold median |log error| fitted ${radar.validation.cv_fitted} vs hand-picked ${radar.validation.cv_radar2}; walk-forward fitted ${radar.validation.wf_fitted ?? 'n/a'} vs hand-picked ${radar.validation.wf_radar2 ?? 'n/a'} (${radar.validation.wf_train_n} train / ${radar.validation.wf_test_n} test)\n` +
+    `token radar: farm verdicts FARM ${verdicts.FARM} / THIN ${verdicts.THIN} / SKIP ${verdicts.SKIP}; board sha ${radar.kpi.board_sha}; top row ${topRow.name} at $${topRow.implied_value_usd.toLocaleString('en-US')}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, dashboard (${dashboardFiles.length} files), screenshots (${shotNames.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );
