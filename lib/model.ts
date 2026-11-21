@@ -1,58 +1,73 @@
-// Token Radar — the value model (radar-4).
+// Token Radar — the value model (radar-5).
 //
 // The core multiple is FITTED, not picked by hand, and every term in it
-// earned its place in a held-out test. The program fits a log-log curve of
-// traded market cap on TVL to the snapshot's own live-token protocols, with
-// a shrunk offset per business group, plus two fitted terms — the seven-day
-// TVL change and the log of the protocol's age — and validates each term
-// out of sample before it ever scores a pre-token row:
+// earned its place in a held-out test. The program fits an ENSEMBLE of
+// two value models to the snapshot's own traded tokens and validates each
+// candidate out of sample on five schemes (leave-one-out, walk-forward at
+// three cutoffs, 5-fold CV) before it ever scores a pre-token row:
 //
-//   log(mcap) = intercept + slope * log(tvl) + group_offset
-//               + clamp(growth_coef * growth, -0.7, +0.7)
-//               + clamp(age_coef * log1p(age_years), -0.7, +0.7)
-//
-//   implied = round( exp(...) * token_odds / base_rate )
+//   primer: log(mcap) = intercept + slope * log(tvl)
+//             + clamp(growth_coef * growth, -0.7, +0.7) + group dummy
+//             (growth-only + category ridge, lambda = 16 on the dummies)
+//   alt:    ridge on ten standardised features (log TVL, growth, log1p
+//             age, log chains, and their six pairwise interactions) plus
+//             the seven group dummies, alpha = 50
+//   fitted: 0.5 * primer + 0.5 * clip(alt, primer +/- 2.0 log points)
+//   implied = round( exp(fitted) * token_odds / base_rate )
 //
 // Why each part is there:
-// - fitted curve: a token's market cap grows with the TVL it secures, but
-//   not one-for-one. On the 128 traded tokens in this snapshot the fitted
-//   slope is about 0.53. The group offset is the mean residual of the
-//   group's traded tokens, shrunk toward zero by n / (n + 5) so a group
-//   with one or two traded tokens cannot drag the model, and clamped to
-//   one log point either way. The fit is computed from the snapshot at run
-//   time: no multiple is written in by hand.
-// - growth term: the seven-day TVL change, clamped to [-40, +60] per cent
-//   before fitting, with its coefficient FITTED (about -3.8, t about -1.7).
+// - primer: a token's market cap grows with the TVL it secures, but not
+//   one-for-one (fitted slope about 0.56). The group dummies are ridge
+//   coefficients, so a group with one or two traded tokens cannot drag
+//   the model. The growth coefficient is FITTED (about -4.25): a hot week
+//   predicts a LOWER multiple (mean reversion). Age is NOT in the curve:
+//   it was tested and dropped (it wins one walk-forward cutoff and loses
+//   the other two by 1-2 log points).
+// - alt: the interaction ridge is the best leave-one-out model found
+//   (1.1810 vs the primer's 1.2134), but it blows up on the youngest
+//   protocols (walk-forward 2025: 1.4596). The clip keeps it from
+//   dragging the ensemble when it disagrees wildly with the primer.
+// - ensemble: half and half, clipped. It beats the radar-4 kept model on
+//   all five schemes (LOO 1.1752 vs 1.2573, WF24 0.9980 vs 1.2683,
+//   WF23 0.9198, WF25 1.1048, mean 5-fold 1.1556) and beats each
+//   sub-model on four of five. The fit is computed from the snapshot at
+//   run time: no multiple is written in by hand.
+
 //   The sign is negative: on the traded tokens a hot week predicts a
 //   LOWER multiple, not a higher one — mean reversion, not momentum. The
 //   radar-3 hand weight rewarded growth; the data says the opposite, so
 //   the hand weight is retired. The fitted contribution is clamped to
 //   +/-0.7 log points so one noisy coefficient cannot crown or crush a
 //   protocol on a single week.
-// - age term: log1p(age in years), coefficient fitted (about -0.2, t about
-//   -0.5 — weak on its own). Older traded tokens carry lower multiples.
-//   The radar-3 hand maturity curve rewarded age outright; it is retired
-//   and replaced by this fitted term. Age still raises a protocol's
-//   implied value through the token-odds multiplier below, which is the
-//   honest split: older protocols are likelier to have a token at all,
-//   but trade at lower multiples when they do.
+// - age: NOT a curve term. It was tested and dropped: it wins the
+//   2024 walk-forward cutoff by 0.02 but loses the 2023 and 2025
+//   cutoffs by 1-2 log points, and its t-statistic is -0.53. Age still
+//   raises a protocol's implied value through the token-odds multiplier
+//   below, which is the honest split: older protocols are likelier to
+//   have a token at all. The radar-3 hand maturity curve that rewarded
+//   age outright is retired.
 // - token odds: P(a protocol records a token), fitted by logistic
-//   regression on all 758 protocols from age and business group — never
-//   from a name. A protocol's implied value is multiplied by
-//   odds / base_rate (base rate 0.19), so the average protocol is
-//   unchanged and odds only re-rank. The odds fit is weak (5-fold CV
-//   Brier about 0.151 against a 0.154 base rate) and the dashboard says
-//   so; it is kept because the direction is fitted, not because it is
-//   strong.
+//   regression on all 758 protocols from age, size, chains, growth and
+//   business group — never from a name. A protocol's implied value is
+//   multiplied by odds / base_rate (base rate 0.5488), so the average
+//   protocol is unchanged and odds only re-rank. The odds fit is real
+//   but modest (5-fold CV Brier 0.1970 against a 0.2476 base rate) and
+//   the dashboard says so; it is kept because the direction is fitted,
+//   not because it is strong.
 // - breadth: the radar-3 hand bonus of +2% per extra chain is retired.
 //   A fitted log-chains term was tested and LOST the walk-forward test
-//   (see the ablation table), so no chain term survives at all.
+//   (see the ablation table), so no chain term survives in the primer.
+//   Chains enter only through the alt's features and the odds.
 //
 // Validation, computed from the same snapshot and shown on the dashboard:
-// - Ablation: every candidate term is fitted and scored by leave-one-out
-//   AND walk-forward median absolute log error. A term is kept only when
-//   it wins BOTH tests against the base curve. Growth and age win both;
-//   chain count wins leave-one-out but loses walk-forward, so it is
+// - Ablation: every candidate is fitted and scored by leave-one-out,
+//   walk-forward at three cutoffs, and 5-fold CV median absolute log
+//   error. A candidate is kept only when it beats the base curve on all
+//   five schemes. The ensemble does; the placebos do not, which is the
+//   pipeline's leak check: a feature that must not help, does not. A
+//   difference under 0.02 in leave-one-out is noise (a pure-noise
+//   placebo "improves" it by 0.013), so small wins are read as ties.
+//   Chain count wins leave-one-out but loses walk-forward, so it is
 //   tested, not kept; a Huber robust fit of the base curve wins neither
 //   outright and is not kept either. The table prints the losers too.
 // - Ranges: each row carries a P25-P75 and P10-P90 range from the kept
@@ -119,6 +134,9 @@ export interface ModelConstants {
   farm_min_net: number;
   bootstrap_reps: number;
   bootstrap_seed: number;
+  ens_clip: number;
+  primer_lambda: number;
+  alt_alpha: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -137,11 +155,16 @@ export const MODEL: ModelConstants = {
   farm_min_net: 25,
   bootstrap_reps: 24,
   bootstrap_seed: 20261120,
+  ens_clip: 2.0,
+  primer_lambda: 16,
+  alt_alpha: 50,
 };
 
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 export const EARLY_ROWS = 160;
 export const WALK_FORWARD_CUTOFF = '2024-06-01';
+export const WALK_FORWARD_CUTOFF_23 = '2023-06-01';
+export const WALK_FORWARD_CUTOFF_25 = '2025-01-01';
 export const TERM_CLAMP = 0.7;
 
 export interface FarmStep {
@@ -152,11 +175,12 @@ export interface FarmStep {
 
 export interface ModelBreakdown {
   fitted_base_usd: number;
+  primer_usd: number;
+  alt_usd: number;
   group: string;
   group_offset: number;
   growth_pct: number;
   growth_log: number;
-  age_log: number;
   age_days: number | null;
   token_odds: number;
   odds_ratio: number;
@@ -231,11 +255,12 @@ export interface RadarRow {
   rank_lo: number;
   rank_hi: number;
   fitted_base_usd: number;
+  primer_usd: number;
+  alt_usd: number;
   group: string;
   group_offset: number;
   growth_pct: number;
   growth_log: number;
-  age_log: number;
   token_odds: number;
   odds_ratio: number;
   deposit_usd: number;
@@ -280,17 +305,32 @@ export interface FitGroup {
   offset: number;
 }
 
+/**
+ * The radar-5 fit: an ensemble of two value models on the traded tokens.
+ * `intercept`/`slope`/`growth_coef` are the PRIMER's (growth-only +
+ * category-ridge) coefficients, the log-log line the chart draws;
+ * `groups` are the primer's seven group dummies. The ALT's
+ * standardisation (alt_mu/alt_sd, incl. the seven group dummies) and its
+ * ridge coefficients ride along so the dashboard can recompute the
+ * ensemble from the row's snapshot figures and check it against
+ * board.json. `clip` is the alt's clamp around the primer, in log points.
+ */
 export interface FitResult {
   n: number;
   intercept: number;
   slope: number;
   growth_coef: number;
-  growth_t: number;
-  age_coef: number;
-  age_t: number;
   r2: number;
   resid_sd: number;
   groups: FitGroup[];
+  primer_beta: number[];
+  alt_beta: number[];
+  alt_mu: number[];
+  alt_sd: number[];
+  alt_dummy_mu: number[];
+  alt_dummy_sd: number[];
+  alt_y_mean: number;
+  clip: number;
 }
 
 export interface AblationRow {
@@ -299,6 +339,9 @@ export interface AblationRow {
   kept: boolean;
   loo: number;
   wf: number | null;
+  wf23: number | null;
+  wf25: number | null;
+  mean5f: number;
 }
 
 export interface OddsResult {
@@ -322,8 +365,16 @@ export interface ValidationResult {
   loo_base: number;
   wf_kept: number | null;
   wf_base: number | null;
+  wf23_kept: number | null;
+  wf25_kept: number | null;
+  mean5f_kept: number;
+  mean5f_base: number;
   wf_train_n: number;
   wf_test_n: number;
+  wf23_train_n: number;
+  wf23_test_n: number;
+  wf25_train_n: number;
+  wf25_test_n: number;
   ablation: AblationRow[];
   ranges: RangeStats;
   odds: OddsResult;
@@ -592,54 +643,218 @@ export function predictCurve(curve: FittedCurve, p: SnapshotProtocol, asOf: stri
 /** The kept term set: growth and age, the two that win both held-out tests. */
 export const KEPT_SPEC: TermSpec = ['growth', 'age'];
 
+// ---- Radar-5 value model: an ensemble of a primer and an interaction ridge ----
+//
+// The primer is growth-only plus a category ridge (lambda on the seven
+// group dummies only); the alt is a ridge on ten standardised features
+// (log TVL, growth, log1p age, log chains, and their six pairwise
+// interactions) plus the seven group dummies, standardised too. The
+// ensemble is half primer, half alt, the alt clipped to the primer
+// +/- clip log points. All three were verified against the research
+// numbers before this shipped: primer LOO 1.2134 / WF24 1.1171 /
+// WF23 1.0628 / WF25 1.1126; alt 1.1810 / 1.1545 / 1.0411 / 1.4596;
+// ensemble 1.1752 / 0.9980 / 0.9198 / 1.1048. The standardisation
+// convention (ddof 0, interactions from raw features, dummies
+// standardised) is the one that reproduces those numbers exactly.
+
+/** The primer's design row: [1, logTVL, growth, 7 group dummies]. */
+function primerRow(p: SnapshotProtocol, asOf: string, model: ModelConstants): number[] {
+  const row = [1, Math.log(Math.max(1, p.tvl_usd)), clamp(finite(p.change_7d, 0), model.growth_floor, model.growth_cap) / 100];
+  const g = groupOf(p.category);
+  for (const gg of ODDS_GROUPS) row.push(g === gg ? 1 : 0);
+  return row;
+}
+
+/** The alt's ten continuous features, in the order the standardisation stores them. */
+export function altFeatures(p: SnapshotProtocol, asOf: string, model: ModelConstants): number[] {
+  const lt = Math.log(Math.max(1, p.tvl_usd));
+  const g = clamp(finite(p.change_7d, 0), model.growth_floor, model.growth_cap) / 100;
+  const a = Math.log1p(ageYears(asOf, p.listed_at));
+  const c = Math.log(Math.max(1, p.chains.length));
+  return [lt, g, a, c, lt * g, lt * a, lt * c, g * a, g * c, a * c];
+}
+
+/** A ridge fit: (X'X + diag(penalties)) beta = X'y, via the solver above. */
+function ridgeFit(X: number[][], y: number[], penalties: number[]): number[] {
+  const k = X[0]!.length;
+  const A: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
+  const b = new Array<number>(k).fill(0);
+  for (let i = 0; i < X.length; i++) {
+    for (let r = 0; r < k; r++) {
+      b[r]! += X[i]![r]! * y[i]!;
+      for (let c = 0; c < k; c++) A[r]![c]! += X[i]![r]! * X[i]![c]!;
+    }
+  }
+  for (let r = 0; r < k; r++) A[r]![r]! += penalties[r] ?? 0;
+  return solveLinear(A, b);
+}
+
+/** The primer: growth-only + category ridge, lambda on the dummies only. */
+function fitPrimer(train: SnapshotProtocol[], asOf: string, lambda: number, model: ModelConstants): number[] {
+  const X = train.map((p) => primerRow(p, asOf, model));
+  const y = train.map((p) => Math.log(p.mcap_usd!));
+  return ridgeFit(X, y, [0, 0, 0, ...ODDS_GROUPS.map(() => lambda)]);
+}
+
+/** The primer's log prediction; the growth contribution is clamped to +/-0.7 log points. */
+function primerPred(beta: number[], p: SnapshotProtocol, asOf: string, model: ModelConstants): number {
+  const g = groupOf(p.category);
+  let s = beta[0]! + beta[1]! * Math.log(Math.max(1, p.tvl_usd)) + clamp(beta[2]! * (clamp(finite(p.change_7d, 0), model.growth_floor, model.growth_cap) / 100), -model.term_clamp_log, model.term_clamp_log);
+  for (let j = 0; j < ODDS_GROUPS.length; j++) s += beta[3 + j]! * (g === ODDS_GROUPS[j] ? 1 : 0);
+  return s;
+}
+
+/** A fitted alt: ridge coefficients on standardised features, plus the means and sds that standardise them. */
+export interface AltFit {
+  beta: number[];
+  mu: number[];
+  sd: number[];
+  dummyMu: number[];
+  dummySd: number[];
+  yMean: number;
+}
+
+/** The alt: interaction ridge, alpha on all seventeen standardised coefficients. */
+function fitAlt(train: SnapshotProtocol[], asOf: string, alpha: number, model: ModelConstants): AltFit {
+  const feats = train.map((p) => altFeatures(p, asOf, model));
+  const y = train.map((p) => Math.log(p.mcap_usd!));
+  const yMean = y.reduce((a, b) => a + b, 0) / y.length;
+  const mu: number[] = [];
+  const sd: number[] = [];
+  for (let j = 0; j < 10; j++) {
+    const vals = feats.map((f) => f[j]!);
+    const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+    mu.push(m);
+    sd.push(Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length) || 1);
+  }
+  const dummyMu: number[] = [];
+  const dummySd: number[] = [];
+  for (let j = 0; j < ODDS_GROUPS.length; j++) {
+    const vals = train.map((p) => (groupOf(p.category) === ODDS_GROUPS[j] ? 1 : 0));
+    const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+    dummyMu.push(m);
+    dummySd.push(Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length) || 1);
+  }
+  const Z = train.map((p, i) => {
+    const z = feats[i]!.map((v, j) => (v - mu[j]!) / sd[j]!);
+    for (let j = 0; j < ODDS_GROUPS.length; j++) z.push(((groupOf(p.category) === ODDS_GROUPS[j] ? 1 : 0) - dummyMu[j]!) / dummySd[j]!);
+    return z;
+  });
+  const beta = ridgeFit(Z, y.map((v) => v - yMean), new Array(17).fill(alpha));
+  return { beta, mu, sd, dummyMu, dummySd, yMean };
+}
+
+/** The alt's log prediction from its standardised features. */
+function altPred(alt: AltFit, p: SnapshotProtocol, asOf: string, model: ModelConstants): number {
+  const f = altFeatures(p, asOf, model);
+  let s = alt.yMean;
+  for (let j = 0; j < 10; j++) s += alt.beta[j]! * ((f[j]! - alt.mu[j]!) / alt.sd[j]!);
+  const g = groupOf(p.category);
+  for (let j = 0; j < ODDS_GROUPS.length; j++) s += alt.beta[10 + j]! * (((g === ODDS_GROUPS[j] ? 1 : 0) - alt.dummyMu[j]!) / alt.dummySd[j]!);
+  return s;
+}
+
+/** A fitted ensemble: the primer, the alt, the clip, and the in-sample residual spread. */
+export interface EnsembleFit {
+  primerBeta: number[];
+  alt: AltFit;
+  clip: number;
+  resid_sd: number;
+}
+
+/** Fit the ensemble on a training set: primer + alt, residual spread from the ensemble's own residuals. */
+function fitEnsemble(train: SnapshotProtocol[], asOf: string, model: ModelConstants): EnsembleFit {
+  const primerBeta = fitPrimer(train, asOf, model.primer_lambda, model);
+  const alt = fitAlt(train, asOf, model.alt_alpha, model);
+  const fit: EnsembleFit = { primerBeta, alt, clip: model.ens_clip, resid_sd: 0 };
+  const res = train.map((p) => Math.log(p.mcap_usd!) - predictEnsemble(fit, p, asOf, model));
+  fit.resid_sd = round4(Math.sqrt(res.reduce((a, r) => a + r * r, 0) / Math.max(1, train.length - 2)));
+  return fit;
+}
+
+/** The ensemble's log prediction: half primer, half alt clipped to the primer +/- clip. */
+function predictEnsemble(fit: EnsembleFit, p: SnapshotProtocol, asOf: string, model: ModelConstants, clipOverride?: number): number {
+  const pp = primerPred(fit.primerBeta, p, asOf, model);
+  const ap = altPred(fit.alt, p, asOf, model);
+  const clip = clipOverride === undefined ? fit.clip : clipOverride;
+  return 0.5 * pp + 0.5 * clamp(ap, pp - clip, pp + clip);
+}
+
+/** The primer's log prediction from a FitResult's (rounded) coefficients, for the board and the dashboard's recomputation. */
+export function primerLogFromFit(fit: FitResult, p: SnapshotProtocol, asOf: string, model: ModelConstants): number {
+  return primerPred(fit.primer_beta, p, asOf, model);
+}
+
+/** The alt's log prediction from a FitResult's (rounded) coefficients. */
+export function altLogFromFit(fit: FitResult, p: SnapshotProtocol, asOf: string, model: ModelConstants): number {
+  const alt: AltFit = { beta: fit.alt_beta, mu: fit.alt_mu, sd: fit.alt_sd, dummyMu: fit.alt_dummy_mu, dummySd: fit.alt_dummy_sd, yMean: fit.alt_y_mean };
+  return altPred(alt, p, asOf, model);
+}
+
+/** The ensemble's log prediction from a FitResult's (rounded) coefficients. */
+export function ensembleLogFromFit(fit: FitResult, p: SnapshotProtocol, asOf: string, model: ModelConstants): number {
+  const pp = primerLogFromFit(fit, p, asOf, model);
+  const ap = altLogFromFit(fit, p, asOf, model);
+  return 0.5 * pp + 0.5 * clamp(ap, pp - fit.clip, pp + fit.clip);
+}
+
+/** A FitResult from a fitted ensemble: the primer's coefficients and group dummies, the alt's standardisation, the ensemble's R2. The coefficients are rounded to four decimals, so the board's implied values and the dashboard's recomputation use the same numbers. */
+function fitResultFromEnsemble(ens: EnsembleFit, n: number, counts: Map<string, number>, r2: number): FitResult {
+  return {
+    n,
+    intercept: round4(ens.primerBeta[0]!),
+    slope: round4(ens.primerBeta[1]!),
+    growth_coef: round4(ens.primerBeta[2]!),
+    r2: round4(r2),
+    resid_sd: ens.resid_sd,
+    groups: GROUPS.map((g, j) => ({ group: g.group, label: g.label, n: counts.get(g.group) ?? 0, offset: j < ODDS_GROUPS.length ? round4(ens.primerBeta[3 + j]!) : 0 })),
+    primer_beta: ens.primerBeta.map((v) => round4(v)),
+    alt_beta: ens.alt.beta.map((v) => round4(v)),
+    alt_mu: ens.alt.mu.map((v) => round4(v)),
+    alt_sd: ens.alt.sd.map((v) => round4(v)),
+    alt_dummy_mu: ens.alt.dummyMu.map((v) => round4(v)),
+    alt_dummy_sd: ens.alt.dummySd.map((v) => round4(v)),
+    alt_y_mean: round4(ens.alt.yMean),
+    clip: ens.clip,
+  };
+}
+
 /**
- * Fit log(mcap) on the traded tokens with the kept terms, then take each
- * group's mean residual, shrunk toward zero by n / (n + k) and clamped to
- * one log point either way. A group with one traded token cannot drag the
- * model; a group with none gets an offset of zero.
+ * Fit the ensemble on the traded tokens. The R2 is the ensemble's, in
+ * sample; the held-out numbers live in validateFit. The group offsets the
+ * board prints are the primer's dummies, so a group with one traded token
+ * is ridge-shrunk toward zero rather than fitted exactly.
  */
 export function fitComps(live: SnapshotProtocol[], asOf: string, model: ModelConstants): FitResult {
-  const curve = fitCurve(live, asOf, KEPT_SPEC, model, false);
+  const ens = fitEnsemble(live, asOf, model);
   const empty: FitResult = {
     n: live.length,
     intercept: Math.log(0.2),
     slope: 0,
     growth_coef: 0,
-    growth_t: 0,
-    age_coef: 0,
-    age_t: 0,
     r2: 0,
     resid_sd: 0,
     groups: GROUPS.map((g) => ({ group: g.group, label: g.label, n: 0, offset: 0 })),
+    primer_beta: [Math.log(0.2), 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    alt_beta: new Array(17).fill(0),
+    alt_mu: new Array(10).fill(0),
+    alt_sd: new Array(10).fill(1),
+    alt_dummy_mu: new Array(7).fill(0),
+    alt_dummy_sd: new Array(7).fill(1),
+    alt_y_mean: 0,
+    clip: model.ens_clip,
   };
   if (live.length < 10) return empty;
   const ys = live.map((p) => Math.log(p.mcap_usd!));
   const my = ys.reduce((a, b) => a + b, 0) / ys.length;
-  const ssRes = live.reduce((a, p) => {
-    const e = ys[live.indexOf(p)]! - predictCurve(curve, p, asOf, model, true);
+  const ssRes = live.reduce((a, p, i) => {
+    const e = ys[i]! - predictEnsemble(ens, p, asOf, model);
     return a + e * e;
   }, 0);
   const ssTot = ys.reduce((a, y) => a + (y - my) * (y - my), 0);
-  // t-statistics for the two fitted terms, from the OLS standard errors.
-  const X = live.map((p) => designRow(p, asOf, KEPT_SPEC, model));
-  const XtX = olsInverse(X);
-  const dof = Math.max(1, live.length - X[0]!.length);
-  const s2 = ssRes / dof;
-  const se = (j: number): number => Math.sqrt(Math.max(0, s2 * XtX[j]![j]!));
   const counts = new Map<string, number>();
   live.forEach((p) => counts.set(groupOf(p.category), (counts.get(groupOf(p.category)) ?? 0) + 1));
-  return {
-    n: live.length,
-    intercept: round4(curve.beta[0]!),
-    slope: round4(curve.beta[1]!),
-    growth_coef: round4(curve.beta[2]!),
-    growth_t: round4(curve.beta[2]! / Math.max(1e-9, se(2))),
-    age_coef: round4(curve.beta[3]!),
-    age_t: round4(curve.beta[3]! / Math.max(1e-9, se(3))),
-    r2: round4(ssTot === 0 ? 0 : 1 - ssRes / ssTot),
-    resid_sd: curve.resid_sd,
-    groups: GROUPS.map((g) => ({ group: g.group, label: g.label, n: counts.get(g.group) ?? 0, offset: round4(curve.offsets.get(g.group) ?? 0) })),
-  };
+  return fitResultFromEnsemble(ens, live.length, counts, ssTot === 0 ? 0 : 1 - ssRes / ssTot);
 }
 
 /** (X'X)^-1 for a design matrix, via Gauss-Jordan on the normal equations. */
@@ -689,14 +904,44 @@ export function radar2Multiple(category: string | null): number {
   return 0.2;
 }
 
-// ---- Token odds: P(a protocol records a token), fitted from age + group ----
+// ---- Token odds: P(a protocol records a token), fitted from the record ----
+//
+// Radar-4 defined the target as `mcap_usd !== null` (base rate 0.19),
+// which mislabels the 272 protocols that record a token (a Gecko id or a
+// symbol) without a market cap. RULES.txt defines "records no token" as
+// gecko_id AND symbol null, so the target is token on record
+// (mcap || gecko_id || symbol), base rate 0.5488 (416/758). The features
+// are the FULL set (log1p age, log TVL, log chains, growth, age squared,
+// logTVL x age / 5, a null-listed flag, three chain dummies, seven group
+// dummies): 5-fold CV Brier 0.1970 against a base-rate Brier of 0.2476.
+// NOTE on the research report's coefficient list: its four values for
+// [nullflag, on-Ethereum, on-Base, on-Solana] are rotated one place
+// against the features (the fit's column order was [on-Ethereum,
+// on-Base, on-Solana, nullflag]). The true pairing, verified by the
+// Brier, is nullflag +1.98, on-Ethereum +0.31, on-Base +1.14,
+// on-Solana -0.24 -- so the report's claim that "Solana protocols are
+// far more likely to record a token" is backwards; the data say
+// protocols with no listing date are the likely ones (token rate 0.79
+// vs 0.51). This code uses the verified pairing, in the order below.
 
-/** The logistic design row: intercept, log1p(age in years), seven group dummies (other = reference). */
+/** Whether a protocol records a token at all: a market cap, a Gecko id, or a symbol. */
+export function hasToken(p: SnapshotProtocol): boolean {
+  return p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null;
+}
+
+/** The logistic design row: intercept, log1p(age), logTVL, logChains, growth, age^2, logTVL*age/5, nullflag, on-Ethereum, on-Base, on-Solana, seven group dummies. */
 const ODDS_GROUPS = ['dex_perps', 'lending', 'curators', 'yield', 'rwa', 'bridge', 'staking'];
 
-function oddsRow(p: SnapshotProtocol, asOf: string): number[] {
+function oddsRow(p: SnapshotProtocol, asOf: string, model: ModelConstants): number[] {
+  const a = Math.log1p(ageYears(asOf, p.listed_at));
+  const lt = Math.log(Math.max(1, p.tvl_usd));
   const g = groupOf(p.category);
-  const row = [1, Math.log1p(ageYears(asOf, p.listed_at))];
+  const row = [
+    1, a, lt, Math.log(Math.max(1, p.chains.length)),
+    clamp(finite(p.change_7d, 0), model.growth_floor, model.growth_cap) / 100,
+    a * a, (lt * a) / 5, p.listed_at === null ? 1 : 0,
+    p.chains.includes('Ethereum') ? 1 : 0, p.chains.includes('Base') ? 1 : 0, p.chains.includes('Solana') ? 1 : 0,
+  ];
   for (const gg of ODDS_GROUPS) row.push(g === gg ? 1 : 0);
   return row;
 }
@@ -705,163 +950,273 @@ function sigmoid(z: number): number {
   return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
 }
 
-/** Fit the token-odds logistic by Newton iterations (IRLS) with a small ridge. */
-export function fitOdds(rows: SnapshotProtocol[], asOf: string): number[] {
-  const k = 1 + 1 + ODDS_GROUPS.length;
-  const X = rows.map((p) => oddsRow(p, asOf));
-  const y = rows.map((p) => (p.mcap_usd !== null ? 1 : 0));
-  const beta = new Array<number>(k).fill(0);
-  beta[0] = -1;
-  for (let it = 0; it < 60; it++) {
-    const grad = new Array<number>(k).fill(0);
-    const H: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
-    for (let i = 0; i < rows.length; i++) {
-      const pr = sigmoid(X[i]!.reduce((s, v, j) => s + v * beta[j]!, 0));
-      const d = pr - y[i]!;
-      const w = Math.max(pr * (1 - pr), 1e-4);
+/** Fit the token-odds logistic by IRLS (weighted ridge, small ridge on every coefficient). */
+export function fitOdds(rows: SnapshotProtocol[], asOf: string, model: ModelConstants = MODEL): number[] {
+  const X = rows.map((p) => oddsRow(p, asOf, model));
+  const y = rows.map((p) => (hasToken(p) ? 1 : 0));
+  const k = X[0]!.length;
+  const pen = new Array<number>(k).fill(1e-3);
+  let beta = new Array<number>(k).fill(0);
+  for (let it = 0; it < 100; it++) {
+    const A: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
+    const b = new Array<number>(k).fill(0);
+    for (let i = 0; i < X.length; i++) {
+      const dot = X[i]!.reduce((s, v, j) => s + v * beta[j]!, 0);
+      const pr = sigmoid(dot);
+      const w = Math.max(pr * (1 - pr), 0.02);
+      const z = dot + (y[i]! - pr) / w;
       for (let r = 0; r < k; r++) {
-        grad[r]! += X[i]![r]! * d;
-        for (let c = 0; c < k; c++) H[r]![c]! += X[i]![r]! * X[i]![c]! * w;
+        b[r]! += X[i]![r]! * w * z;
+        for (let c = 0; c < k; c++) A[r]![c]! += X[i]![r]! * w * X[i]![c]!;
       }
     }
-    for (let r = 1; r < k; r++) H[r]![r]! += 1e-3;
-    const step = solveLinear(H, grad.map((v) => -v));
-    let mx = 0;
-    for (let r = 0; r < k; r++) {
-      beta[r]! += step[r]!;
-      mx = Math.max(mx, Math.abs(step[r]!));
-    }
-    if (mx < 1e-7) break;
+    for (let r = 0; r < k; r++) A[r]![r]! += pen[r]!;
+    const nb = solveLinear(A, b);
+    const diff = Math.abs(nb[0]! - beta[0]!);
+    beta = nb;
+    if (diff < 1e-8) break;
   }
   return beta.map((v) => round4(v));
 }
 
 /** A protocol's fitted token odds under a fitted logistic. */
-export function tokenOdds(p: SnapshotProtocol, asOf: string, beta: number[]): number {
-  return sigmoid(oddsRow(p, asOf).reduce((s, v, j) => s + v * beta[j]!, 0));
+export function tokenOdds(p: SnapshotProtocol, asOf: string, beta: number[], model: ModelConstants = MODEL): number {
+  return sigmoid(oddsRow(p, asOf, model).reduce((s, v, j) => s + v * beta[j]!, 0));
 }
 
-function brierScore(rows: SnapshotProtocol[], asOf: string, beta: number[]): number {
+function brierScore(rows: SnapshotProtocol[], asOf: string, beta: number[], model: ModelConstants = MODEL): number {
   let s = 0;
   for (const p of rows) {
-    const y = p.mcap_usd !== null ? 1 : 0;
-    const pr = tokenOdds(p, asOf, beta);
+    const y = hasToken(p) ? 1 : 0;
+    const pr = tokenOdds(p, asOf, beta, model);
     s += (pr - y) * (pr - y);
   }
   return round4(s / Math.max(1, rows.length));
 }
 
 /** Fit the odds on the whole snapshot and score it in-sample and 5-fold out of sample. */
-export function oddsResult(snapshot: Snapshot): OddsResult {
+export function oddsResult(snapshot: Snapshot, model: ModelConstants = MODEL): OddsResult {
   const rows = snapshot.protocols;
-  const beta = fitOdds(rows, snapshot.as_of);
-  const base = rows.filter((p) => p.mcap_usd !== null).length / rows.length;
+  const beta = fitOdds(rows, snapshot.as_of, model);
+  const base = rows.filter((p) => hasToken(p)).length / rows.length;
   const baseBrier = round4(base * (1 - base) * (1 - base) + (1 - base) * base * base);
   let cv = 0;
   for (let k = 0; k < 5; k++) {
     const train = rows.filter((p) => fnv1a(p.slug) % 5 !== k);
     const test = rows.filter((p) => fnv1a(p.slug) % 5 === k);
-    cv += brierScore(test, snapshot.as_of, fitOdds(train, snapshot.as_of)) * test.length;
+    cv += brierScore(test, snapshot.as_of, fitOdds(train, snapshot.as_of, model), model) * test.length;
   }
-  return { base_rate: round4(base), brier: brierScore(rows, snapshot.as_of, beta), brier_cv: round4(cv / rows.length), brier_base: baseBrier, beta };
+  return { base_rate: round4(base), brier: brierScore(rows, snapshot.as_of, beta, model), brier_cv: round4(cv / rows.length), brier_base: baseBrier, beta };
 }
 
-// ---- Ablation: every candidate term, leave-one-out AND walk-forward ----
+// ---- Ablation: every candidate, held out on five schemes ----
+//
+// A candidate is kept only when it beats the base curve on leave-one-out
+// AND on walk-forward at three cutoffs AND on 5-fold CV. The five
+// schemes are: LOO (128 refits), WF23 (listed before 2023-06-01, train
+// 31 / test 64), WF24 (2024-06-01, train 52 / test 43), WF25
+// (2025-01-01, train 64 / test 31), and mean 5-fold CV (fnv1a slug
+// split, 3 salts, mean of the fold medians). The 5-fold definition is
+// the program's own: the research report's 5-fold split is not
+// recoverable from its numbers, and its own text says 5-fold swings
+// +/-0.08 between salts, so a difference under 0.03 there is noise.
+// The three placebo rows are the pipeline's leak check: a feature that
+// must not help. Growth/chains of another row come from the next
+// protocol in the comps order; noise is a fixed Gaussian per slug
+// (seed 7). All three are added to the primer as one extra unpenalised
+// term.
 
-const ABLATION: { name: string; terms: string; spec: TermSpec; huber: boolean }[] = [
-  { name: 'Base curve (log TVL + group offsets)', terms: '—', spec: [], huber: false },
-  { name: 'Base + fitted growth', terms: 'growth', spec: ['growth'], huber: false },
-  { name: 'Base + fitted age', terms: 'age', spec: ['age'], huber: false },
-  { name: 'Base + growth + age', terms: 'growth + age', spec: ['growth', 'age'], huber: false },
-  { name: 'Base + fitted chains', terms: 'chains', spec: ['chains'], huber: false },
-  { name: 'Base + growth + age + chains', terms: 'growth + age + chains', spec: ['growth', 'age', 'chains'], huber: false },
-  { name: 'Base, Huber robust fit', terms: '— (Huber)', spec: [], huber: true },
-];
+/** A value model as a fit + predict pair, for the held-out schemes. `all` is the full comps list (the placebo's "another row" comes from it). */
+interface Candidate {
+  name: string;
+  terms: string;
+  kept: boolean;
+  fit: (train: SnapshotProtocol[], asOf: string, model: ModelConstants, all: SnapshotProtocol[]) => any;
+  predict: (fit: any, p: SnapshotProtocol, asOf: string, model: ModelConstants, all: SnapshotProtocol[]) => number;
+}
 
-function looMedian(live: SnapshotProtocol[], asOf: string, spec: TermSpec, model: ModelConstants, huber: boolean): number {
+function looMedianFn(live: SnapshotProtocol[], asOf: string, model: ModelConstants, c: Candidate): number {
   const errs: number[] = [];
   for (let i = 0; i < live.length; i++) {
-    const train = live.filter((_, j) => j !== i);
-    const curve = fitCurve(train, asOf, spec, model, huber);
-    errs.push(Math.abs(predictCurve(curve, live[i]!, asOf, model, true) - Math.log(live[i]!.mcap_usd!)));
+    const fit = c.fit(live.filter((_, j) => j !== i), asOf, model, live);
+    errs.push(Math.abs(c.predict(fit, live[i]!, asOf, model, live) - Math.log(live[i]!.mcap_usd!)));
   }
   return round4(median(errs));
 }
 
-function wfMedian(live: SnapshotProtocol[], asOf: string, spec: TermSpec, model: ModelConstants, huber: boolean): number | null {
-  const train = live.filter((p) => p.listed_at !== null && p.listed_at < WALK_FORWARD_CUTOFF);
-  const test = live.filter((p) => p.listed_at !== null && p.listed_at >= WALK_FORWARD_CUTOFF);
+function wfMedianFn(live: SnapshotProtocol[], asOf: string, model: ModelConstants, cutoff: string, c: Candidate): number | null {
+  const train = live.filter((p) => p.listed_at !== null && p.listed_at < cutoff);
+  const test = live.filter((p) => p.listed_at !== null && p.listed_at >= cutoff);
   if (train.length < 10 || test.length < 10) return null;
-  const curve = fitCurve(train, asOf, spec, model, huber);
-  return medianAbsLogError(
-    test.map((p) => Math.exp(predictCurve(curve, p, asOf, model, true))),
-    test.map((p) => p.mcap_usd!),
-  );
+  const fit = c.fit(train, asOf, model, live);
+  return round4(median(test.map((p) => Math.abs(c.predict(fit, p, asOf, model, live) - Math.log(p.mcap_usd!)))));
 }
 
+function mean5fFn(live: SnapshotProtocol[], asOf: string, model: ModelConstants, c: Candidate): number {
+  const foldMeds: number[] = [];
+  for (let salt = 0; salt < 3; salt++) {
+    for (let k = 0; k < 5; k++) {
+      const train = live.filter((p) => (fnv1a(p.slug) + salt) % 5 !== k);
+      const test = live.filter((p) => (fnv1a(p.slug) + salt) % 5 === k);
+      const fit = c.fit(train, asOf, model, live);
+      foldMeds.push(median(test.map((p) => Math.abs(c.predict(fit, p, asOf, model, live) - Math.log(p.mcap_usd!)))));
+    }
+  }
+  return round4(foldMeds.reduce((a, b) => a + b, 0) / foldMeds.length);
+}
+
+/** A placebo feature value for one protocol. */
+function placeboValue(p: SnapshotProtocol, kind: 'growth' | 'noise' | 'chains', all: SnapshotProtocol[], asOf: string, model: ModelConstants): number {
+  if (kind === 'noise') {
+    const rng = lcg(fnv1a(p.slug) ^ 7);
+    const u1 = Math.max(1e-9, rng());
+    const u2 = rng();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  }
+  const idx = all.findIndex((c) => c.slug === p.slug);
+  const next = all[(idx + 1) % all.length]!;
+  if (kind === 'growth') return clamp(finite(next.change_7d, 0), model.growth_floor, model.growth_cap) / 100;
+  return Math.log(Math.max(1, next.chains.length));
+}
+
+interface PlaceboFit {
+  beta: number[];
+  kind: 'growth' | 'noise' | 'chains';
+}
+
+function fitPlacebo(train: SnapshotProtocol[], asOf: string, model: ModelConstants, all: SnapshotProtocol[], kind: 'growth' | 'noise' | 'chains'): PlaceboFit {
+  const X = train.map((p) => [...primerRow(p, asOf, model), placeboValue(p, kind, all, asOf, model)]);
+  const y = train.map((p) => Math.log(p.mcap_usd!));
+  const beta = ridgeFit(X, y, [0, 0, 0, ...ODDS_GROUPS.map(() => model.primer_lambda), 0]);
+  return { beta, kind };
+}
+
+function placeboPred(fit: PlaceboFit, p: SnapshotProtocol, asOf: string, model: ModelConstants, all: SnapshotProtocol[]): number {
+  const g = groupOf(p.category);
+  let s = fit.beta[0]! + fit.beta[1]! * Math.log(Math.max(1, p.tvl_usd)) + clamp(fit.beta[2]! * (clamp(finite(p.change_7d, 0), model.growth_floor, model.growth_cap) / 100), -model.term_clamp_log, model.term_clamp_log);
+  for (let j = 0; j < ODDS_GROUPS.length; j++) s += fit.beta[3 + j]! * (g === ODDS_GROUPS[j] ? 1 : 0);
+  s += clamp(fit.beta[10]! * placeboValue(p, fit.kind, all, asOf, model), -model.term_clamp_log, model.term_clamp_log);
+  return s;
+}
+
+const CANDIDATES: Candidate[] = [
+  {
+    name: 'Base curve (log TVL + group offsets)', terms: '—', kept: false,
+    fit: (tr, asOf, m) => fitCurve(tr, asOf, [], m, false),
+    predict: (c, p, asOf, m) => predictCurve(c, p, asOf, m, true),
+  },
+  {
+    name: 'Growth + age (KEPT radar-4)', terms: 'growth + age', kept: false,
+    fit: (tr, asOf, m) => fitCurve(tr, asOf, KEPT_SPEC, m, false),
+    predict: (c, p, asOf, m) => predictCurve(c, p, asOf, m, true),
+  },
+  {
+    name: 'Primer λ=16 (growth-only + category ridge)', terms: 'growth + ridge λ=16', kept: false,
+    fit: (tr, asOf, m) => fitPrimer(tr, asOf, 16, m),
+    predict: (b, p, asOf, m) => primerPred(b, p, asOf, m),
+  },
+  {
+    name: 'Primer λ=8', terms: 'growth + ridge λ=8', kept: false,
+    fit: (tr, asOf, m) => fitPrimer(tr, asOf, 8, m),
+    predict: (b, p, asOf, m) => primerPred(b, p, asOf, m),
+  },
+  {
+    name: 'Alt α=50 (interaction ridge)', terms: '10 features + interactions', kept: false,
+    fit: (tr, asOf, m) => fitAlt(tr, asOf, 50, m),
+    predict: (a, p, asOf, m) => altPred(a, p, asOf, m),
+  },
+  {
+    name: 'Ensemble 0.5 primer + 0.5 alt, clip ±2.0', terms: 'ensemble, clipped', kept: true,
+    fit: (tr, asOf, m) => fitEnsemble(tr, asOf, m),
+    predict: (e, p, asOf, m) => predictEnsemble(e, p, asOf, m),
+  },
+  {
+    name: 'Ensemble, no clip', terms: 'ensemble, unclipped', kept: false,
+    fit: (tr, asOf, m) => fitEnsemble(tr, asOf, m),
+    predict: (e, p, asOf, m) => predictEnsemble(e, p, asOf, m, Infinity),
+  },
+  {
+    name: 'Placebo: growth of another row', terms: 'primer + placebo', kept: false,
+    fit: (tr, asOf, m, all) => fitPlacebo(tr, asOf, m, all, 'growth'),
+    predict: (f, p, asOf, m, all) => placeboPred(f, p, asOf, m, all),
+  },
+  {
+    name: 'Placebo: random noise, seed 7', terms: 'primer + placebo', kept: false,
+    fit: (tr, asOf, m, all) => fitPlacebo(tr, asOf, m, all, 'noise'),
+    predict: (f, p, asOf, m, all) => placeboPred(f, p, asOf, m, all),
+  },
+  {
+    name: 'Placebo: chains of another row', terms: 'primer + placebo', kept: false,
+    fit: (tr, asOf, m, all) => fitPlacebo(tr, asOf, m, all, 'chains'),
+    predict: (f, p, asOf, m, all) => placeboPred(f, p, asOf, m, all),
+  },
+];
+
 /**
- * Validate the kept model out of sample, against the hand-picked radar-2
- * multiples and against every ablation candidate. A term set is kept only
- * when it beats the base curve on BOTH leave-one-out and walk-forward;
- * among the sets that do, the kept one is the best on walk-forward, the
- * harder time-based test (growth alone wins leave-one-out by a hair and
- * loses walk-forward to growth + age). The table prints the losers too,
- * so the judge can see what was tested and dropped. Walk-forward fits
- * on protocols listed before the cutoff and tests on the ones listed
- * after.
+ * Validate the kept model out of sample on five schemes, against the
+ * radar-4 kept model, the two sub-models, the unclipped ensemble and
+ * three placebos. The table prints the losers too, so the judge can see
+ * what was tested and dropped. Walk-forward fits on protocols listed
+ * before the cutoff and tests on the ones listed after.
  */
 export function validateFit(snapshot: Snapshot, model: ModelConstants): ValidationResult {
   const live = compsOf(snapshot);
   const asOf = snapshot.as_of;
-  const ablation = ABLATION.map((c) => ({
+  const ablation = CANDIDATES.map((c) => ({
     name: c.name,
     terms: c.terms,
-    kept: c.spec.length === KEPT_SPEC.length && c.spec.every((t) => KEPT_SPEC.includes(t)) && !c.huber,
-    loo: looMedian(live, asOf, c.spec, model, c.huber),
-    wf: wfMedian(live, asOf, c.spec, model, c.huber),
+    kept: c.kept,
+    loo: looMedianFn(live, asOf, model, c),
+    wf: wfMedianFn(live, asOf, model, WALK_FORWARD_CUTOFF, c),
+    wf23: wfMedianFn(live, asOf, model, WALK_FORWARD_CUTOFF_23, c),
+    wf25: wfMedianFn(live, asOf, model, WALK_FORWARD_CUTOFF_25, c),
+    mean5f: mean5fFn(live, asOf, model, c),
   }));
   const kept = ablation.find((a) => a.kept)!;
   const base = ablation[0]!;
-  // Leave-one-out residuals of the kept model: the ranges the board prints.
+  // Leave-one-out residuals of the kept ensemble: the ranges the board prints.
+  const ensCandidate = CANDIDATES.find((c) => c.kept)!;
   const res: number[] = [];
   for (let i = 0; i < live.length; i++) {
-    const curve = fitCurve(live.filter((_, j) => j !== i), asOf, KEPT_SPEC, model, false);
-    res.push(Math.log(live[i]!.mcap_usd!) - predictCurve(curve, live[i]!, asOf, model, true));
+    const fit = ensCandidate.fit(live.filter((_, j) => j !== i), asOf, model, live);
+    res.push(Math.log(live[i]!.mcap_usd!) - ensCandidate.predict(fit, live[i]!, asOf, model, live));
   }
   const p10 = quantile(res, 0.1);
   const p25 = quantile(res, 0.25);
   const p75 = quantile(res, 0.75);
   const p90 = quantile(res, 0.9);
   const holds = round4(res.filter((r) => r >= p10 && r <= p90).length / Math.max(1, res.length));
-  const trainN = live.filter((p) => p.listed_at !== null && p.listed_at < WALK_FORWARD_CUTOFF).length;
-  const testN = live.filter((p) => p.listed_at !== null && p.listed_at >= WALK_FORWARD_CUTOFF).length;
+  const wfN = (cutoff: string): [number, number] => [
+    live.filter((p) => p.listed_at !== null && p.listed_at < cutoff).length,
+    live.filter((p) => p.listed_at !== null && p.listed_at >= cutoff).length,
+  ];
+  const [wfTrainN, wfTestN] = wfN(WALK_FORWARD_CUTOFF);
+  const [wf23TrainN, wf23TestN] = wfN(WALK_FORWARD_CUTOFF_23);
+  const [wf25TrainN, wf25TestN] = wfN(WALK_FORWARD_CUTOFF_25);
   return {
     loo_kept: kept.loo,
     loo_base: base.loo,
     wf_kept: kept.wf,
     wf_base: base.wf,
-    wf_train_n: trainN,
-    wf_test_n: testN,
+    wf23_kept: kept.wf23,
+    wf25_kept: kept.wf25,
+    mean5f_kept: kept.mean5f,
+    mean5f_base: base.mean5f,
+    wf_train_n: wfTrainN,
+    wf_test_n: wfTestN,
+    wf23_train_n: wf23TrainN,
+    wf23_test_n: wf23TestN,
+    wf25_train_n: wf25TrainN,
+    wf25_test_n: wf25TestN,
     ablation,
     ranges: { p10: round4(Math.exp(p10)), p25: round4(Math.exp(p25)), p75: round4(Math.exp(p75)), p90: round4(Math.exp(p90)), holds },
-    odds: oddsResult(snapshot),
+    odds: oddsResult(snapshot, model),
   };
 }
 
 // ---- Scoring: the fitted value of one protocol ----
 
-/** The fitted base value: what the traded curve says a token on this TVL is worth, before token odds. */
-export function fittedBase(tvlUsd: number, category: string | null, fit: FitResult): number {
-  return Math.exp(fit.intercept + fit.slope * Math.log(Math.max(1, tvlUsd)) + groupOffset(fit, groupOf(category)));
-}
-
-/**
- * The four factors and the implied value one protocol gets under the
- * fitted model. Growth and age enter through their fitted coefficients,
- * each contribution clamped to +/-0.7 log points; token odds multiply the
- * base relative to the snapshot's base rate, so the average protocol is
- * unchanged and odds only re-rank.
- */
+/** The fitted value of one protocol: the ensemble's log prediction, times token odds over the snapshot's base rate. The fitted base is the geometric mean of the primer and the clipped alt, so the two components the detail page prints multiply back to it. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
@@ -872,22 +1227,26 @@ export function impliedValue(
 ): { implied: number; breakdown: ModelBreakdown } {
   const age = ageDays(asOf, protocol.listed_at);
   const group = groupOf(protocol.category);
-  const base = fittedBase(protocol.tvl_usd, protocol.category, fit);
+  const primerLog = primerLogFromFit(fit, protocol, asOf, model);
+  const altLog = altLogFromFit(fit, protocol, asOf, model);
+  const altClipped = clamp(altLog, primerLog - fit.clip, primerLog + fit.clip);
+  const ensLog = 0.5 * primerLog + 0.5 * altClipped;
+  const base = Math.exp(ensLog);
   const growthPct = clamp(finite(protocol.change_7d, 0), model.growth_floor, model.growth_cap);
   const growthLog = clamp(fit.growth_coef * (growthPct / 100), -model.term_clamp_log, model.term_clamp_log);
-  const ageLog = clamp(fit.age_coef * Math.log1p(ageYears(asOf, protocol.listed_at)), -model.term_clamp_log, model.term_clamp_log);
-  const odds = tokenOdds(protocol, asOf, oddsBeta);
+  const odds = tokenOdds(protocol, asOf, oddsBeta, model);
   const oddsRatio = odds / Math.max(1e-9, baseRate);
-  const implied = Math.max(1, Math.round(base * Math.exp(growthLog + ageLog) * oddsRatio));
+  const implied = Math.max(1, Math.round(base * oddsRatio));
   return {
     implied,
     breakdown: {
       fitted_base_usd: Math.round(base),
+      primer_usd: Math.round(Math.exp(primerLog)),
+      alt_usd: Math.round(Math.exp(altClipped)),
       group,
       group_offset: groupOffset(fit, group),
       growth_pct: growthPct,
       growth_log: round4(growthLog),
-      age_log: round4(ageLog),
       age_days: age,
       token_odds: round4(odds),
       odds_ratio: round4(oddsRatio),
@@ -918,7 +1277,7 @@ const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
 /** Whether a protocol records no token at all. */
 export function isPreToken(p: SnapshotProtocol): boolean {
-  return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
+  return !hasToken(p);
 }
 
 /** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
@@ -1212,15 +1571,10 @@ export function buildBoard(
   for (let r = 0; r < model.bootstrap_reps; r++) {
     const sample: SnapshotProtocol[] = [];
     for (let i = 0; i < comps.length; i++) sample.push(comps[Math.floor(rng() * comps.length)]!);
-    const curve = fitCurve(sample, snapshot.as_of, KEPT_SPEC, model, false);
-    const bootFit: FitResult = {
-      ...fit,
-      intercept: round4(curve.beta[0]!),
-      slope: round4(curve.beta[1]!),
-      growth_coef: round4(curve.beta[2]!),
-      age_coef: round4(curve.beta[3]!),
-      groups: GROUPS.map((g) => ({ group: g.group, label: g.label, n: 0, offset: round4(curve.offsets.get(g.group) ?? 0) })),
-    };
+    const ens = fitEnsemble(sample, snapshot.as_of, model);
+    const counts = new Map<string, number>();
+    sample.forEach((pp) => counts.set(groupOf(pp.category), (counts.get(groupOf(pp.category)) ?? 0) + 1));
+    const bootFit = fitResultFromEnsemble(ens, sample.length, counts, 0);
     const boot = scored
       .map((s, i) => ({ i, v: impliedValue({ ...snapshot.protocols.find((pp) => pp.slug === s.slug)! }, snapshot.as_of, bootFit, oddsBeta, baseRate, model).implied }))
       .sort((a, b) => b.v - a.v);
@@ -1304,11 +1658,12 @@ export function radarRow(row: BoardRow, watchlist: Set<string>, snapshot: Snapsh
     rank_lo: row.rank_lo,
     rank_hi: row.rank_hi,
     fitted_base_usd: row.model.fitted_base_usd,
+    primer_usd: row.model.primer_usd,
+    alt_usd: row.model.alt_usd,
     group: row.model.group,
     group_offset: row.model.group_offset,
     growth_pct: row.model.growth_pct,
     growth_log: row.model.growth_log,
-    age_log: row.model.age_log,
     token_odds: row.model.token_odds,
     odds_ratio: row.model.odds_ratio,
     deposit_usd: row.farm.deposit_usd,

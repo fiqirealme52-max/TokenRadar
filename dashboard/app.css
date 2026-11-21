@@ -1,6 +1,4 @@
-/* Token Radar — a dark-ink dashboard on a paper page.
-   Palette: ink navy, paper, one amber accent for value, green for growth,
-   red for decline. One radius, one type scale, generous spacing. */
+/* Token Radar — dark ink on paper; amber for value, green for growth, red for decline. */
 :root {
   --paper: #f4f1ea;
   --surface: #ffffff;
@@ -60,8 +58,8 @@ button { cursor: pointer; }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 5px var(--s3); border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
 th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--surface); position: sticky; top: 0; }
 th button { display: inline-flex; align-items: center; gap: var(--s1); border: 0; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; }
 th button:hover { color: var(--ink); }
@@ -78,11 +76,10 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); box-shadow: ins
 .bar i { display: block; height: 100%; background: var(--accent); }
 .implied { display: flex; align-items: center; gap: var(--s2); }
 .badge { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
-.badge.watch { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+.badge.watch, .badge.thin { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
 .badge.early { background: var(--chip); color: var(--muted); border: 1px solid var(--line); }
-.badge.live { background: #e6f4ec; color: var(--good); border: 1px solid var(--good); }
-.badge.farm { background: #e6f4ec; color: var(--good); border: 1px solid var(--good); }
-.badge.thin { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+.badge.live, .badge.farm { background: #e6f4ec; color: var(--good); border: 1px solid var(--good); }
+
 .badge.skip { background: #fbe9e7; color: var(--bad); border: 1px solid var(--bad); }
 .farm-cell { display: grid; gap: 2px; justify-items: start; }
 .farm-cell .num { font-size: 12px; color: var(--muted); }
@@ -104,11 +101,11 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); box-shadow: ins
 .button { min-height: 38px; padding: 0 var(--s4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-weight: 600; }
 .button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-.detail { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 94vw); z-index: 10; margin: 0 0 0 auto; max-height: 100%; background: var(--surface); border: 0; border-left: 1px solid var(--line); padding: var(--s5); overflow-y: auto; }
-.detail::backdrop { background: rgba(20, 32, 46, 0.35); }
 
 /* Evidence panel above the fold: formula, held-out test, accounting. */
 .evidence { display: grid; grid-template-columns: 1.25fr 1fr 1.1fr; gap: var(--s4); padding: var(--s4); margin-top: var(--s3); }
+.evidence .chart-wrap { grid-column: 1 / -1; }
+.evidence .chart-wrap h2 { font-size: 14px; margin-bottom: var(--s1); }
 .ev-col { display: grid; gap: var(--s1); align-content: start; min-width: 0; }
 .ev-col h2 { font-size: 14px; }
 .evidence .mult-table th, .evidence .mult-table td { padding: 3px 6px; font-size: 12px; }
@@ -119,6 +116,11 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); box-shadow: ins
 .seg-id { background: #2e7fa8; }
 .seg-set { background: #9aa5b1; }
 .badge-line { font-size: 13px; font-weight: 650; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.chip { min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); font-size: 12px; font-weight: 600; color: var(--muted); }
+.chip.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.best-net { padding: var(--s2) var(--s3) 0; font-weight: 600; color: var(--ink); }
+.econ-strip { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius); padding: var(--s2) var(--s3); font-size: 13px; color: var(--ink); }
 
 /* Full-page detail view. */
 .detail-page { display: grid; gap: var(--s4); padding: var(--s5) 0; }
@@ -128,7 +130,6 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); box-shadow: ins
 .detail-head > div { min-width: 0; }
 .detail-head .sub { overflow-wrap: anywhere; margin-top: var(--s1); }
 .close { flex: none; min-width: 34px; min-height: 34px; padding: 0 var(--s2); white-space: nowrap; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-weight: 600; }
-.detail h2 { margin-top: var(--s1); }
 .detail-section { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--line); }
 .detail-section h3 { margin-bottom: var(--s2); }
 .equation { display: grid; gap: var(--s2); font-size: 13px; }
