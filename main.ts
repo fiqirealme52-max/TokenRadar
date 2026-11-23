@@ -1,12 +1,12 @@
-// Token Radar (radar-5) — the entry program, Node 22, standard library only.
+// Token Radar (radar-6) — the entry program, Node 22, standard library only.
 //
-// Reads the sealed snapshot, fits an ENSEMBLE of two value models to its
-// own traded tokens (a growth-only + category-ridge primer and an
-// interaction ridge, the alt clipped to the primer +/-2 log points),
-// multiplies by the token-odds fitted from the peers' record (target:
-// token on record, base rate 0.5488), scores every pre-token protocol
-// with the fitted model in lib/model.ts, validates each candidate out of
-// sample on five schemes, and writes the ranked board, the dashboard
+// Reads the sealed snapshot, fits a size curve plus a heavily-shrunk
+// group ridge (lambda 256, no growth, no age) to its own traded tokens,
+// fits the token odds from the peers' record (target: token on record,
+// base rate 0.5488) and SHOWS them without letting them move the
+// ranking, scores every pre-token protocol with the fitted model in
+// lib/model.ts, validates each candidate out of sample on five schemes
+// plus board TVL-coherence, and writes the ranked board, the dashboard
 // data, the dashboard and screenshots, and the dossier the judge reads.
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -103,9 +103,9 @@ const v = radar.validation;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: accounting ${acc.ranked} ranked + ${acc.traded} traded + ${acc.id_no_price} token-on-record-no-price + ${acc.set_aside_cex + acc.set_aside_versioned + acc.set_aside_above_floor + acc.set_aside_below_floor} set aside = ${accounted}\n` +
-    `token radar: ensemble fit on ${radar.fit.n} traded tokens: primer log(mcap) = ${radar.fit.intercept} + ${radar.fit.slope} * log(tvl) + ${radar.fit.growth_coef} * growth + group dummy (ridge 16); alt interaction-ridge alpha 50, clip +/-${radar.fit.clip}; R2 = ${radar.fit.r2}, residual sd = ${radar.fit.resid_sd} log points\n` +
-    `token radar: token odds (target: token on record, base rate ${v.odds.base_rate}) CV Brier ${v.odds.brier_cv} vs base ${v.odds.brier_base}, in-sample ${v.odds.brier}\n` +
-    `token radar: held-out median |log error| ensemble LOO ${v.loo_kept} vs base ${v.loo_base}; WF23 ${v.wf23_kept ?? 'n/a'} (${v.wf23_train_n}/${v.wf23_test_n}), WF24 ${v.wf_kept ?? 'n/a'} vs base ${v.wf_base ?? 'n/a'} (${v.wf_train_n}/${v.wf_test_n}), WF25 ${v.wf25_kept ?? 'n/a'} (${v.wf25_train_n}/${v.wf25_test_n}); mean 5-fold ${v.mean5f_kept} vs base ${v.mean5f_base}; P10-P90 range holds ${Math.round(v.ranges.holds * 100)}%\n` +
+    `token radar: groups curve (lambda ${radar.model.groups_lambda}) fit on ${radar.fit.n} traded tokens: log(mcap) = ${radar.fit.intercept} + ${radar.fit.slope} * log(tvl) + group dummy (ridge ${radar.model.groups_lambda}); R2 = ${radar.fit.r2}, residual sd = ${radar.fit.resid_sd} log points\n` +
+    `token radar: token odds (target: token on record, base rate ${v.odds.base_rate}, ridge ${radar.model.odds_ridge}) CV Brier ${v.odds.brier_cv} vs base ${v.odds.brier_base}, in-sample ${v.odds.brier}; walk-forward Brier ${v.odds.wf_brier.map((x) => x === null ? 'n/a' : x).join('/')} vs stale bases ${v.odds.wf_stale.map((x) => x === null ? 'n/a' : x).join('/')} (accuracy ${v.odds.wf_acc.map((x) => x === null ? 'n/a' : x).join('/')}); odds are shown, not applied to the ranking\n` +
+    `token radar: held-out median |log error| groups curve LOO ${v.loo_kept} vs base ${v.loo_base}; WF23 ${v.wf23_kept ?? 'n/a'} (${v.wf23_train_n}/${v.wf23_test_n}), WF24 ${v.wf_kept ?? 'n/a'} vs base ${v.wf_base ?? 'n/a'} (${v.wf_train_n}/${v.wf_test_n}), WF25 ${v.wf25_kept ?? 'n/a'} (${v.wf25_train_n}/${v.wf25_test_n}); mean 5-fold ${v.mean5f_kept} vs base ${v.mean5f_base}; board Spearman ${v.ablation.find((a) => a.kept)?.spearman ?? 'n/a'}; P10-P90 range holds ${Math.round(v.ranges.holds * 100)}%\n` +
     `token radar: farm verdicts FARM ${verdicts.FARM} / THIN ${verdicts.THIN} / SKIP ${verdicts.SKIP}; board sha ${radar.kpi.board_sha}; top row ${topRow.name} at $${topRow.implied_value_usd.toLocaleString('en-US')}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, dashboard (${dashboardFiles.length} files), screenshots (${shotNames.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );
